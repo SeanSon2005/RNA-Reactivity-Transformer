@@ -3,25 +3,26 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 import torch.nn as nn
-from x_transformers import Decoder
+from x_transformers import Encoder, Decoder
 from model import ContinuousTransformerWrapper
 from sklearn.model_selection import train_test_split
 from helpers import Plotter, WebHook
 
 # constants
-DATA_COUNT = 335600
-BATCH_SIZE = 32
+DATA_COUNT = 335617
+BATCH_SIZE = 4
 LEARNING_RATE = 1e-4
 EPOCHS = 50
-NUM_TOKENS = 4
+VECTOR_SIZE = 4
+EXPANSION_FACTOR = 1
 MAX_SEQ_LENGTH = 457
-VALID_PERCENT = 0.2
+VALID_PERCENT = 0.1
 
 # Change for your needs
-LOAD_MODEL_STATES = True
+LOAD_MODEL_STATES = False
 MODE = 0
 SAVE_WEIGHTS = True
-RESUME_TRAINING = True
+RESUME_TRAINING = False
 
 # Filter Data
 TRAINING_SEQ_LENGTH = 177
@@ -50,7 +51,7 @@ def training_loop(train_batches, valid_batches, epoch, weighted_MAE):
     model.train()
 
     ema_loss = None
-    with tqdm(train_batches, bar_format='{l_bar}{bar:100}{r_bar}{bar:-100b}') as pbar:
+    with tqdm(train_batches, bar_format='{l_bar}{bar:80}{r_bar}{bar:-80b}') as pbar:
         for batch in pbar:
             # handle data
             src, tgt = batch
@@ -93,7 +94,7 @@ def training_loop(train_batches, valid_batches, epoch, weighted_MAE):
     #set model to evalution mode (disable dropouts, etc)
     model.eval()
 
-    with tqdm(valid_batches, bar_format='{l_bar}{bar:100}{r_bar}{bar:-100b}') as pbar:
+    with tqdm(valid_batches, bar_format='{l_bar}{bar:80}{r_bar}{bar:-80b}') as pbar:
         for batch in pbar:
             # handle data
             src, tgt = batch
@@ -134,13 +135,15 @@ if __name__ == "__main__":
 
   # get the RNA sequences
   mapping = {'G': [1,0,0,0],
-          'A': [0,1,0,0],
-          'U': [0,0,1,0],
-          'C': [0,0,0,1]}
+             'A': [0,1,0,0],
+             'U': [0,0,1,0],
+             'C': [0,0,0,1]
+            }
   input_sequences = (df["sequence"].apply(lambda x: np.array([mapping[i] for i in x]))).values
 
   # get reactivity error
   output_error = np.nan_to_num(df[["reactivity_error_"+str(i).zfill(4) for i in range(1, TRAINING_SEQ_LENGTH+1)]].values)
+  
 
   # get experiment type
   mapping = {
@@ -180,31 +183,37 @@ if __name__ == "__main__":
 
   #define Transformer Model
   model = ContinuousTransformerWrapper(
-    dim_in = NUM_TOKENS,
+    dim_in = VECTOR_SIZE,
     dim_out = 1,
     max_seq_len = MAX_SEQ_LENGTH,
+    use_abs_pos_emb = False,
     attn_layers = Decoder(
-        dim = 512,
-        depth = 12,
-        heads = 8,
+        dim = (VECTOR_SIZE * EXPANSION_FACTOR),
+        depth = 48,
+        heads = 32,
+        attn_dim_head = 128,
         rotary_xpos = True,
         ff_glu = True,
     )
   )
 
-  if LOAD_MODEL_STATES: #load weights if existing and desired
+  # define loss function and optimizer
+  loss_MAE = torch.nn.MSELoss()
+  def loss_fn(pred, target, weights):
+    return loss_MAE(pred,target)
+  optim = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+
+  if RESUME_TRAINING:
+    print("All Checkpoints Loaded")
+    model.load_state_dict(torch.load("resume.pt")['model_state_dict'])
+    optim.load_state_dict(torch.load("resume.pt")['optimizer_state_dict'])
+  elif LOAD_MODEL_STATES: #load weights if existing and desired
     print("Model Weights Loaded")
     model.load_state_dict(torch.load("best.pt"))
 
   model.to(device)
 
   print("Begining training...\n")
-
-  # define loss function and optimizer
-  loss_MAE = torch.nn.L1Loss()
-  def loss_fn(pred, target, weights):
-    return loss_MAE(pred,target)
-  optim = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
   # training loop
   train_loss_points = []

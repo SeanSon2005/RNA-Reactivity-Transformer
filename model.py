@@ -37,6 +37,17 @@ def default(val, d):
 
 # main classes
 
+class ExpandDim(nn.Module):
+    def __init__(self, dim_in, dim_out):
+        super().__init__()
+        self.expansion = int(dim_out / dim_in)
+
+    def forward(self, x):
+        if self.expansion == 1:
+            return x
+        else:
+            return torch.repeat_interleave(x,self.expansion, dim=2)
+
 class ContinuousTransformerWrapper(nn.Module):
     def __init__(
         self,
@@ -81,13 +92,11 @@ class ContinuousTransformerWrapper(nn.Module):
         self.attn_layers = attn_layers
 
         # project in and out
+        self.project_in = ExpandDim(dim_in=dim_in, dim_out=dim)
 
-        self.project_in = nn.Linear(dim_in, dim)
         self.project_out = nn.Sequential(
-            nn.Linear(dim,64),
-            nn.Linear(64,dim_out)
+            nn.Linear(dim,dim_out),
         )
-
 
     def forward(
         self,
