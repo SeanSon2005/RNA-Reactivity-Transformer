@@ -13,6 +13,7 @@ from einops import rearrange, repeat, pack, unpack
 import torch.nn.functional as Fumpy
 from typing import List, Optional
 import numpy as np
+from embedding import Embedding
 
 
 import torch
@@ -37,17 +38,6 @@ def default(val, d):
 
 # main classes
 
-class ExpandDim(nn.Module):
-    def __init__(self, dim_in, dim_out):
-        super().__init__()
-        self.expansion = int(dim_out / dim_in)
-
-    def forward(self, x):
-        if self.expansion == 1:
-            return x
-        else:
-            return torch.repeat_interleave(x,self.expansion, dim=2)
-
 class ContinuousTransformerWrapper(nn.Module):
     def __init__(
         self,
@@ -61,7 +51,8 @@ class ContinuousTransformerWrapper(nn.Module):
         num_memory_tokens = None,
         post_emb_norm = False,
         use_abs_pos_emb = True,
-        scaled_sinu_pos_emb = False
+        scaled_sinu_pos_emb = False,
+        use_CNN = False
     ):
         super().__init__()
         dim = attn_layers.dim
@@ -92,10 +83,10 @@ class ContinuousTransformerWrapper(nn.Module):
         self.attn_layers = attn_layers
 
         # project in and out
-        self.project_in = ExpandDim(dim_in=dim_in, dim_out=dim)
-
+        self.project_in = Embedding(dim_in=dim_in, dim_out=dim, use_CNN=use_CNN, max_len=max_seq_len)
         self.project_out = nn.Sequential(
-            nn.Linear(dim,dim_out),
+            nn.Linear(dim,16),
+            nn.Linear(16,dim_out),
         )
 
     def forward(

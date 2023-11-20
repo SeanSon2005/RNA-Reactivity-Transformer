@@ -6,7 +6,7 @@ from x_transformers import Decoder
 from model import ContinuousTransformerWrapper
 
 # constants
-DATA_COUNT = 31000
+DATA_COUNT = 1000
 BATCH_SIZE = 32
 LEARNING_RATE = 8e-3
 EPOCHS = 30
@@ -20,7 +20,7 @@ TRAINING_SEQ_LENGTH = 177
 
 DATA_COUNT = 10
 
-df = pd.read_csv('data/train_data.csv', nrows = DATA_COUNT)
+df = pd.read_csv('data/train_data_quick.csv', nrows = DATA_COUNT)
 df.head()
 
 # get the RNA sequences

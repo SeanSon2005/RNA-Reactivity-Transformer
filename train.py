@@ -9,12 +9,12 @@ from sklearn.model_selection import train_test_split
 from helpers import Plotter, WebHook
 
 # constants
-DATA_COUNT = 335617
-BATCH_SIZE = 4
+DATA_COUNT = 4000#335617
+BATCH_SIZE = 8
 LEARNING_RATE = 1e-4
 EPOCHS = 50
 VECTOR_SIZE = 4
-EXPANSION_FACTOR = 1
+EXPANSION_FACTOR = 4
 MAX_SEQ_LENGTH = 457
 VALID_PERCENT = 0.1
 
@@ -187,6 +187,7 @@ if __name__ == "__main__":
     dim_out = 1,
     max_seq_len = MAX_SEQ_LENGTH,
     use_abs_pos_emb = False,
+    use_CNN = True,
     attn_layers = Decoder(
         dim = (VECTOR_SIZE * EXPANSION_FACTOR),
         depth = 48,
