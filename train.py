@@ -2,80 +2,122 @@ import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
-import torch.nn as nn
 from x_transformers import Encoder, Decoder
-from model import ContinuousTransformerWrapper
-from sklearn.model_selection import train_test_split
+from model import RNA_Model
 from helpers import Plotter, WebHook
+from sklearn.model_selection import KFold
+from torch.utils.data import Dataset, DataLoader
+import torch.nn.functional as F
 
-# constants
-DATA_COUNT = 335617
-BATCH_SIZE = 8
+SEED = 2023
+BATCH_SIZE = 16
+MAX_SEQ_LEN = 206
+N_SPLITS = 5 # split data into N_SPLITS; 1/N_SPLITS is used for validation
 LEARNING_RATE = 1e-4
-EPOCHS = 50
-VECTOR_SIZE = 4
-EXPANSION_FACTOR = 16
-MAX_SEQ_LENGTH = 457
-VALID_PERCENT = 0.1
-
-# Change for your needs
-LOAD_MODEL_STATES = False
-MODE = 0
 SAVE_WEIGHTS = True
-RESUME_TRAINING = False
+EPOCHS = 50
 
-# Filter Data
-TRAINING_SEQ_LENGTH = 177
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+# define Transformer Model
+MODEL = RNA_Model(
+    max_seq_len = 457,
+    use_abs_pos_emb = False,
+    scaled_sinu_pos_emb = True,
+    attn_layers = Encoder(
+        dim = 256,
+        depth = 12,
+        heads = 32,
+        attn_dim_head = 64,
+        ff_glu = True,
+    )
+)
+MODEL.to(device)
 
-class StatementDataset(torch.utils.data.Dataset):
-  def __init__(self, statements, labels):
-    self.statements = statements
-    self.labels = labels
-
-  def __getitem__(self, index):
-    statement = self.statements[index]
-    labels = self.labels[index]
-    example = (statement, labels)
-    return example
-
-  def __len__(self):
-    return len(self.statements)
-
-def training_loop(train_batches, valid_batches, epoch, weighted_MAE):
+class RNA_Dataset(Dataset):
+    def __init__(self, df, mode='train'):
+        self.seq_map = {'G': 0,
+                        'A': 1,
+                        'U': 2,
+                        'C': 3}
+        df['L'] = df.sequence.apply(len) #adds new column for length of sequence
+        df_2A3 = df.loc[df.experiment_type=='2A3_MaP'] # get rows of experiment 2A3_MaP
+        df_DMS = df.loc[df.experiment_type=='DMS_MaP'] # get rows of experiment DMS_MaP
+        
+        # gets indices for splitting train and validation
+        split = list(KFold(n_splits=N_SPLITS, random_state=SEED,
+                shuffle=True).split(df_2A3))[0][0 if mode=='train' else 1]
+        
+        # applys split data to the rows
+        df_2A3 = df_2A3.iloc[split].reset_index(drop=True)
+        df_DMS = df_DMS.iloc[split].reset_index(drop=True)
+        
+        # filter rows where SN_filter is greater than 0
+        m = (df_2A3['SN_filter'].values > 0) & (df_DMS['SN_filter'].values > 0)
+        df_2A3 = df_2A3.loc[m].reset_index(drop=True)
+        df_DMS = df_DMS.loc[m].reset_index(drop=True)
+        
+        # get sequences
+        self.seq = df_2A3['sequence'].values
+        self.L = df_2A3['L'].values
+        
+        self.react_2A3 = df_2A3[[c for c in df_2A3.columns if \
+                                 'reactivity_0' in c]].values
+        self.react_DMS = df_DMS[[c for c in df_DMS.columns if \
+                                 'reactivity_0' in c]].values
+        self.react_err_2A3 = df_2A3[[c for c in df_2A3.columns if \
+                                 'reactivity_error_0' in c]].values
+        self.react_err_DMS = df_DMS[[c for c in df_DMS.columns if \
+                                'reactivity_error_0' in c]].values
+        self.sn_2A3 = df_2A3['signal_to_noise'].values
+        self.sn_DMS = df_DMS['signal_to_noise'].values
+        
+    def __len__(self):
+        return len(self.seq)  
+    
+    def __getitem__(self, idx):
+        seq = self.seq[idx]
+        seq = np.array([self.seq_map[s] for s in seq])
+        mask = torch.zeros(MAX_SEQ_LEN, dtype=torch.bool)
+        mask[:len(seq)] = True
+        seq = np.pad(seq,(0,MAX_SEQ_LEN-len(seq)))
+        
+        react = torch.from_numpy(np.stack([self.react_2A3[idx],
+                                           self.react_DMS[idx]],-1))
+        react_err = torch.from_numpy(np.stack([self.react_err_2A3[idx],
+                                               self.react_err_DMS[idx]],-1))
+        sn = torch.FloatTensor([self.sn_2A3[idx],self.sn_DMS[idx]])
+        
+        return (torch.from_numpy(seq), mask, react, react_err, sn)
+    
+def training_loop(train_batches, valid_batches, epoch):
     print("EPOCH: "+ str(epoch))
 
     train_losses = []
     val_losses = []
 
     #set model to training mode (enable dropouts, etc)
-    model.train()
+    MODEL.train()
 
     ema_loss = None
-    with tqdm(train_batches, bar_format='{l_bar}{bar:80}{r_bar}{bar:-80b}') as pbar:
+    with tqdm(train_batches, bar_format='{l_bar}{bar:70}{r_bar}{bar:-70b}') as pbar:
         for batch in pbar:
             # handle data
-            src, tgt = batch
-            tgt_react, mask, tgt_error, experiment = tgt
+            seq, mask, react, react_err, sn = batch
 
             # send data to device
-            src = src.type(torch.float32).to(device)
-            tgt_react = tgt_react.type(torch.float32).to(device)
+            seq = seq.type(torch.int64).to(device)
             mask = mask.type(torch.bool).to(device)
-            tgt_error = tgt_error.type(torch.float32).to(device)
+            react = react.type(torch.float32).to(device)
+            react_err = react_err.type(torch.float32).to(device)
 
             # zero the gradients
             optim.zero_grad()
 
             # make predictions
-            tgt_pred = model(src)
-
-            # mask null reactivities
-            pred_masked = torch.masked_select(tgt_pred.squeeze(), mask)
-            tgt_masked = torch.masked_select(tgt_react, mask)
-            err_masked = torch.masked_select(tgt_error, mask)
+            prediction = MODEL(seq, mask)
   
             # calc loss and backprop
-            loss = weighted_MAE(pred_masked, tgt_masked, err_masked)
+            loss = loss_fn(prediction, react, mask)
             loss.backward()
 
             # step
@@ -92,192 +134,87 @@ def training_loop(train_batches, valid_batches, epoch, weighted_MAE):
     print("↳ Average Training Loss: " + str(train_loss))
 
     #set model to evalution mode (disable dropouts, etc)
-    model.eval()
+    MODEL.eval()
 
-    with tqdm(valid_batches, bar_format='{l_bar}{bar:80}{r_bar}{bar:-80b}') as pbar:
+    with tqdm(valid_batches, bar_format='{l_bar}{bar:70}{r_bar}{bar:-70b}') as pbar:
         for batch in pbar:
             # handle data
-            src, tgt = batch
-            tgt_react, mask, tgt_error, experiment = tgt
+            seq, mask, react, react_err, sn = batch
 
             # send data to device
-            src = src.type(torch.float32).to(device)
-            tgt_react = tgt_react.type(torch.float32).to(device)
+            seq = seq.type(torch.int64).to(device)
             mask = mask.type(torch.bool).to(device)
-            tgt_error = tgt_error.type(torch.float32).to(device)
+            react = react.type(torch.float32).to(device)
+            react_err = react_err.type(torch.float32).to(device)
             
             # validate model
             with torch.no_grad():
-              tgt_pred = model(src)
+              prediction = MODEL(seq, mask)
 
-              pred_masked = torch.masked_select(tgt_pred.squeeze(), mask)
-              tgt_masked = torch.masked_select(tgt_react, mask)
-              err_masked = torch.masked_select(tgt_error, mask)
-
-              loss = weighted_MAE(pred_masked, tgt_masked, err_masked)
+              loss = loss_fn(prediction, react, mask)
               pbar.desc = f'Validation loss: {loss.item()}'
 
             val_losses.append(loss.item())
     val_loss = np.array(val_losses).mean()
     print("↳ Average Validation Loss: " + str(val_loss) + "\n")
     return train_loss, val_loss
-  
+
 # MAIN FUNCTION
 if __name__ == "__main__":
+    df = pd.read_csv('data/train_data.csv')
 
-  df = pd.read_csv('data/train_data_quick.csv', nrows = DATA_COUNT)
-  df.head()
+    ds_train = RNA_Dataset(df, mode='train')
+    ds_val = RNA_Dataset(df, mode='eval')
 
-  # filter rows based on user request
-  df = df.loc[df['sequence'].str.len() == TRAINING_SEQ_LENGTH]
-  DATA_USABLE_COUNT = len(df.index)
-  print("Using " + str(DATA_USABLE_COUNT) + " rows")
+    train_loader = DataLoader(ds_train,
+                                batch_size=BATCH_SIZE,
+                                shuffle=True)
+    valid_loader = DataLoader(ds_val,
+                                batch_size=BATCH_SIZE,
+                                shuffle=True)
 
-  # get the RNA sequences
-  mapping = {'G': [1,0,0,0],
-             'A': [0,1,0,0],
-             'U': [0,0,1,0],
-             'C': [0,0,0,1]
-            }
-  input_sequences = (df["sequence"].apply(lambda x: np.array([mapping[i] for i in x]))).values
+    # define loss function
+    def loss_fn(pred,target,mask):
+        seq_len = pred.shape[1]
+        p = pred[mask[:,:seq_len]]
+        y = target[mask].clip(0,1)
+        loss = F.l1_loss(p, y, reduction='none')
+        loss = loss[~torch.isnan(loss)].mean()
+        return loss
 
-  # get reactivity error
-  output_error = np.nan_to_num(df[["reactivity_error_"+str(i).zfill(4) for i in range(1, TRAINING_SEQ_LENGTH+1)]].values)
-  
+    optim = torch.optim.Adam(MODEL.parameters(), lr=LEARNING_RATE)
+    print("Begining training...\n")
 
-  # get experiment type
-  mapping = {
-    "2A3_MaP":False,
-    "DMS_MaP":True
-  }
-  output_experiment = df["experiment_type"].apply(lambda x: mapping[x]).values
+    # training loop
+    train_loss_points = []
+    val_loss_points = []
 
-  # get null mask and set NaNs to 0 for training
-  react_df = df[["reactivity_"+str(i).zfill(4) for i in range(1, TRAINING_SEQ_LENGTH+1)]].values
-  output_null_sequences = np.isfinite(react_df)
-  output_react_sequences = np.nan_to_num(react_df)
-
-  # construct input and output lists to split for training and validation
-  output_sequences = []
-  for i in range(DATA_USABLE_COUNT):
-    output_sequences.append([output_react_sequences[i],
-                             output_null_sequences[i],
-                             output_error[i],
-                             output_experiment[i]])
-
-  X_train, X_test, y_train, y_test = train_test_split(input_sequences,
-                                                      output_sequences, 
-                                                      test_size = VALID_PERCENT)
-    
-  train_loader = torch.utils.data.DataLoader(StatementDataset(X_train, y_train),
-                                             batch_size=BATCH_SIZE,
-                                             shuffle=True)
-  valid_loader = torch.utils.data.DataLoader(StatementDataset(X_test, y_test),
-                                             batch_size=BATCH_SIZE,
-                                             shuffle=True)
-
-  print("Data is ready")
-
-  #define device (GPU!)
-  device = "cuda" if torch.cuda.is_available() else "cpu"
-
-  #define Transformer Model
-  model = ContinuousTransformerWrapper(
-    dim_in = VECTOR_SIZE,
-    dim_out = 1,
-    max_seq_len = MAX_SEQ_LENGTH,
-    use_abs_pos_emb = False,
-    use_CNN = True,
-    attn_layers = Decoder(
-        dim = (VECTOR_SIZE * EXPANSION_FACTOR),
-        depth = 24,
-        heads = 16,
-        attn_dim_head = 256,
-        rotary_xpos = True,
-        ff_glu = True,
-    )
-  )
-
-  # define loss function and optimizer
-  loss_MAE = torch.nn.MSELoss()
-  def loss_fn(pred, target, weights):
-    return loss_MAE(pred,target)
-  optim = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-
-  if RESUME_TRAINING:
-    print("All Checkpoints Loaded")
-    model.load_state_dict(torch.load("resume.pt")['model_state_dict'])
-    optim.load_state_dict(torch.load("resume.pt")['optimizer_state_dict'])
-  elif LOAD_MODEL_STATES: #load weights if existing and desired
-    print("Model Weights Loaded")
-    model.load_state_dict(torch.load("best.pt"))
-
-  model.to(device)
-
-  print("Begining training...\n")
-
-  # training loop
-  train_loss_points = []
-  val_loss_points = []
-  if MODE == 0:
     discord_webhook = WebHook()
     discord_webhook.sendMessage("Beginning Training...",
                                 include_date=True)
     best = None
     for epoch in range(EPOCHS):
-      train_loss, val_loss = training_loop(train_loader,
-                                           valid_loader,
-                                           epoch+1,
-                                           loss_fn)
+        train_loss, val_loss = training_loop(train_loader,
+                                            valid_loader,
+                                            epoch+1)
 
-      train_loss_points.append(train_loss)
-      val_loss_points.append(val_loss)
-      discord_webhook.anounceEpoch(epoch+1,
-                           train_loss=train_loss,
-                           val_loss=val_loss)
-
-      if best == None or val_loss < best:
-        best = val_loss
+        train_loss_points.append(train_loss)
+        val_loss_points.append(val_loss)
+        discord_webhook.anounceEpoch(epoch+1,
+                            train_loss=train_loss,
+                            val_loss=val_loss)
         if SAVE_WEIGHTS:
-          print("____________________\nBest Weights Updated\n____________________")
-          torch.save(model.state_dict(), "best.pt")
-      torch.save({
-        'epoch': epoch,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optim.state_dict(),
-        }, "resume.pt")
+            if best == None or val_loss < best:
+                best = val_loss
+                print("____________________\nBest Weights Updated\n____________________")
+                torch.save(MODEL.state_dict(), "best.pt")
+            torch.save({
+            'epoch': epoch,
+            'model_state_dict': MODEL.state_dict(),
+            'optimizer_state_dict': optim.state_dict(),
+            }, "resume.pt")
 
     info_plotter = Plotter(EPOCHS)
     info_plotter.save_loss(train_loss_points, val_loss_points)
     discord_webhook.sendMessage("Finished Training!",
                                 include_date=True)
-
-  elif MODE == 1:
-    # handle data
-    tgt_react, mask = output_sequences[0]
-    src_RNA = input_sequences[0]
-
-    src_RNA = torch.tensor(src_RNA).unsqueeze(axis=0)
-    tgt_react = torch.tensor(tgt_react).unsqueeze(axis=0)
-    mask = torch.tensor(mask)
-
-    # send data to device
-    src_RNA = src_RNA.type(torch.float32).to(device)
-    tgt_react = tgt_react.type(torch.float32).to(device)
-    mask = mask.type(torch.bool).to(device)
-    
-    # validate model
-    with torch.no_grad():
-      tgt_pred = model(src_RNA)
-
-      pred_masked = torch.masked_select(tgt_pred.squeeze(), mask)
-      tgt_masked = torch.masked_select(tgt_react, mask)
-
-      print(pred_masked)
-      print(tgt_masked)
-      loss = loss_fn(pred_masked, tgt_masked)
-
-      print(loss.item())
-
-
-

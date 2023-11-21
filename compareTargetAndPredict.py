@@ -3,7 +3,7 @@ import pandas as pd
 import torch
 import matplotlib.pyplot as plt
 from x_transformers import Decoder
-from model import ContinuousTransformerWrapper
+from train import MODEL
 
 # constants
 DATA_COUNT = 1000
@@ -38,24 +38,10 @@ reactivities = output_react[0]
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 #define Transformer Model
-model = ContinuousTransformerWrapper(
-    dim_in = VECTOR_SIZE,
-    dim_out = 1,
-    max_seq_len = MAX_SEQ_LENGTH,
-    use_abs_pos_emb = False,
-    attn_layers = Decoder(
-        dim = (VECTOR_SIZE * EXPANSION_FACTOR),
-        depth = 24,
-        heads = 8,
-        attn_dim_head = 128,
-        rotary_xpos = True,
-        ff_glu = True,
-    )
-  )
-model.to(device)
+MODEL.to(device)
 
 rna_seq = torch.Tensor(input_sequences[0]).unsqueeze(axis=0).to(device)
-tgt_pred = np.round(model(rna_seq).squeeze().detach().cpu().numpy(),3)
+tgt_pred = np.round(MODEL(rna_seq).squeeze().detach().cpu().numpy(),3)
 
 print(reactivities)
 print(tgt_pred)

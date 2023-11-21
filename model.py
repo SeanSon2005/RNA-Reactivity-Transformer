@@ -1,58 +1,28 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
-import torch.nn.functional as F
-
-from x_transformers.x_transformers import AttentionLayers
-from x_transformers.attend import Intermediates
 from x_transformers.x_transformers import *
 
 import math
 from functools import partial
 from einops import rearrange, repeat, pack, unpack
-import torch.nn.functional as Fumpy
 from typing import List, Optional
 import numpy as np
-from embedding import Embedding
-
-
-import torch
-from torch import nn
 import torch.nn.functional as F
-
-from x_transformers.x_transformers import (
-    AttentionLayers,
-    ScaledSinusoidalEmbedding,
-    AbsolutePositionalEmbedding
-)
-
-# helper functions
-
-def exists(val):
-    return val is not None
-
-def default(val, d):
-    if exists(val):
-        return val
-    return d() if callable(d) else d
 
 # main classes
 
-class ContinuousTransformerWrapper(nn.Module):
+class RNA_Model(nn.Module):
     def __init__(
         self,
         *,
         max_seq_len,
         attn_layers: AttentionLayers,
-        dim_in = None,
-        dim_out = None,
-        emb_dim = None,
         max_mem_len = 0,
         num_memory_tokens = None,
         post_emb_norm = False,
         use_abs_pos_emb = True,
         scaled_sinu_pos_emb = False,
-        use_CNN = False
     ):
         super().__init__()
         dim = attn_layers.dim
@@ -83,26 +53,29 @@ class ContinuousTransformerWrapper(nn.Module):
         self.attn_layers = attn_layers
 
         # project in and out
-        self.project_in = Embedding(dim_in=dim_in, dim_out=dim, use_CNN=use_CNN, max_len=max_seq_len)
+        self.project_in = nn.Embedding(4,dim)
         self.project_out = nn.Sequential(
-            nn.Linear(dim,16),
-            nn.Linear(16,dim_out),
+            nn.Linear(dim,32),
+            nn.Linear(32,2)
         )
 
     def forward(
         self,
-        x,
+        seq,
+        seq_mask,
         return_embeddings = False,
-        return_intermediates = False,
-        return_mems = False,
         mask = None,
-        return_attn = False,
         mems = None,
         pos = None,
         **kwargs
     ):
-        batch = x.shape[0]
 
+        # mask out nulls in data
+        Lmax = seq_mask.sum(-1).max()
+        seq_mask = seq_mask[:,:Lmax]
+        x = seq[:,:Lmax]
+
+        # embeddings
         x = self.project_in(x)
         
         x = x + self.pos_emb(x, pos = pos)
@@ -112,6 +85,7 @@ class ContinuousTransformerWrapper(nn.Module):
         # memory tokens
 
         if self.has_memory_tokens:
+            batch = x.shape[0]
             m = repeat(self.memory_tokens, 'm d -> b m d', b = batch)
             x, mem_ps = pack([m, x], 'b * d')
 
@@ -130,17 +104,4 @@ class ContinuousTransformerWrapper(nn.Module):
             intermediates.memory_tokens = m
 
         out = self.project_out(x) if not return_embeddings else x
-
-        if return_intermediates:
-            return out, intermediates
-
-        if return_mems:
-            hiddens = intermediates.hiddens
-            new_mems = list(map(lambda t: t[..., -self.max_mem_len:, :].detach(), hiddens))
-            return out, new_mems
-
-        if return_attn:
-            attn_maps = list(map(lambda t: t.post_softmax_attn, intermediates.attn_intermediates))
-            return out, attn_maps
-
         return out
