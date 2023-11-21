@@ -16,7 +16,6 @@ class RNA_Model(nn.Module):
     def __init__(
         self,
         *,
-        max_seq_len,
         attn_layers: AttentionLayers,
         max_mem_len = 0,
         num_memory_tokens = None,
@@ -27,16 +26,12 @@ class RNA_Model(nn.Module):
         super().__init__()
         dim = attn_layers.dim
 
-        self.max_seq_len = max_seq_len
-
         self.max_mem_len = max_mem_len
 
         if not (use_abs_pos_emb and not attn_layers.has_pos_emb):
             self.pos_emb = always(0)
         elif scaled_sinu_pos_emb:
             self.pos_emb = ScaledSinusoidalEmbedding(dim)
-        else:
-            self.pos_emb = AbsolutePositionalEmbedding(dim, max_seq_len)
 
         self.post_emb_norm = nn.LayerNorm(dim) if post_emb_norm else nn.Identity()
 
@@ -55,17 +50,17 @@ class RNA_Model(nn.Module):
         # project in and out
         self.project_in = nn.Embedding(4,dim)
         self.project_out = nn.Sequential(
-            nn.Linear(dim,32),
-            nn.Linear(32,2)
+            nn.Linear(dim,2),
         )
+
+        self.transformer = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(d_model=dim, nhead=6, dim_feedforward=4*dim,
+                dropout=0.1, activation=nn.GELU(), batch_first=True, norm_first=True), attn_layers.depth)
 
     def forward(
         self,
         seq,
         seq_mask,
-        return_embeddings = False,
-        mask = None,
-        mems = None,
         pos = None,
         **kwargs
     ):
@@ -82,26 +77,8 @@ class RNA_Model(nn.Module):
 
         x = self.post_emb_norm(x)
 
-        # memory tokens
+        x = self.transformer(x, src_key_padding_mask=~seq_mask)
+        #x, _ = self.attn_layers(x, attn_mask = seq_mask, mems = mems, return_hiddens = True, **kwargs)
 
-        if self.has_memory_tokens:
-            batch = x.shape[0]
-            m = repeat(self.memory_tokens, 'm d -> b m d', b = batch)
-            x, mem_ps = pack([m, x], 'b * d')
-
-            if exists(mask):
-                num_mems = m.shape[-2]
-                mask = pad_at_dim(mask, (num_mems, 0), dim = -1, value = True)
-
-        # attention layers
-
-        x, intermediates = self.attn_layers(x, mask = mask, mems = mems, return_hiddens = True, **kwargs)
-
-        # splice out memory tokens
-
-        if self.has_memory_tokens:
-            m, x = unpack(x, mem_ps, 'b * d')
-            intermediates.memory_tokens = m
-
-        out = self.project_out(x) if not return_embeddings else x
+        out = self.project_out(x)
         return out
