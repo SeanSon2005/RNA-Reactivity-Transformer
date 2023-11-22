@@ -1,8 +1,7 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-#read your sub here
 
-df=pd.read_csv("submission.csv")
+df=pd.read_csv("submissions/submission.csv")
 
 #some parameters
 font_size=6
