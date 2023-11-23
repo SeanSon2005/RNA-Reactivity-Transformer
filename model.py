@@ -11,7 +11,7 @@ import numpy as np
 import torch.nn.functional as F
 
 DIM = 256
-DEPTH = 16
+DEPTH = 20
 HEADS = 8
 
 # main classes
@@ -25,16 +25,13 @@ class RNA_Model(nn.Module):
         self.post_emb_norm = nn.LayerNorm(DIM) # if post_emb_norm else nn.Identity()
 
         # attention layers
-        self.attn_layers = Encoder(
+        self.attn_layers = Decoder(
             dim = DIM,
             depth = DEPTH,
             heads = HEADS,
             ff_glu = True,
             layer_dropout = 0.1,
         )
-        self.attn_layers_torch = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(d_model=DIM, nhead=HEADS, dim_feedforward=4*DIM,
-                dropout=0.1, activation=nn.GELU(), batch_first=True, norm_first=True), DEPTH)
 
         # project in and out
         self.project_in = nn.Embedding(4,DIM)

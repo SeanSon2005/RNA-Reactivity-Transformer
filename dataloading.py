@@ -73,10 +73,6 @@ class RNA_Dataset(Dataset):
         df_2A3 = df_2A3.iloc[split].reset_index(drop=True)
         df_DMS = df_DMS.iloc[split].reset_index(drop=True)
         
-        m = (df_2A3['SN_filter'].values > 0) & (df_DMS['SN_filter'].values > 0)
-        df_2A3 = df_2A3.loc[m].reset_index(drop=True)
-        df_DMS = df_DMS.loc[m].reset_index(drop=True)
-        
         self.seq = df_2A3['sequence'].values
         self.L = df_2A3['L'].values
         
@@ -88,8 +84,6 @@ class RNA_Dataset(Dataset):
                                  'reactivity_error_0' in c]].values
         self.react_err_DMS = df_DMS[[c for c in df_DMS.columns if \
                                 'reactivity_error_0' in c]].values
-        self.sn_2A3 = df_2A3['signal_to_noise'].values
-        self.sn_DMS = df_DMS['signal_to_noise'].values
         self.mask_only = mask_only
         
     def __len__(self):
@@ -108,15 +102,14 @@ class RNA_Dataset(Dataset):
         seq = np.pad(seq,(0,self.Lmax-len(seq)))
         
         react = torch.from_numpy(np.stack([self.react_2A3[idx],
-                                           self.react_DMS[idx]],-1))
+                                           self.react_DMS[idx]],-1))#.type(torch.float32)
         react_err = torch.from_numpy(np.stack([self.react_err_2A3[idx],
-                                               self.react_err_DMS[idx]],-1))
-        sn = torch.FloatTensor([self.sn_2A3[idx],self.sn_DMS[idx]])
+                                               self.react_err_DMS[idx]],-1))#.type(torch.float32)
         
         return {'seq':torch.from_numpy(seq), 'mask':mask, 
                 'seq_len':torch.tensor(self.L[idx])}, \
                {'react':react, 'react_err':react_err,
-                'sn':sn, 'mask':mask}
+                'mask':mask}
     
 class LenMatchBatchSampler(torch.utils.data.BatchSampler):
     def __iter__(self):
