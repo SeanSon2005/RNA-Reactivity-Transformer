@@ -9,11 +9,14 @@ from model import RNA_Model2, RNA_Model
 FILE_NAME = 'weights'
 PATH = 'data/'
 OUT = 'runs/'
-BATCH_SIZE = 128
+BATCH_SIZE = 64
 NUM_WORKERS = 12
 SEED = 2023
 nfolds = 4
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+EPOCHS = 50
+MAX_LEARNING_RATE = 5e-4
+WEIGHT_DECAY = 0.05
 
 seed_everything(SEED)
 os.makedirs(OUT, exist_ok=True)
@@ -46,6 +49,6 @@ for fold in [0]: # running multiple folds at kaggle may cause OOM
     learn = Learner(data, model, loss_func=loss,cbs=[GradientClip(3.0)],
                 metrics=[MAE()]).to_fp16() 
 
-    learn.fit_one_cycle(50, lr_max=5e-4, wd=0.05, pct_start=0.04)
+    learn.fit_one_cycle(EPOCHS, lr_max=MAX_LEARNING_RATE, wd=WEIGHT_DECAY, pct_start=0.04)
     torch.save(learn.model.state_dict(),os.path.join(OUT,f'{FILE_NAME}_{fold}.pth'))
     gc.collect()

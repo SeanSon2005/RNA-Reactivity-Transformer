@@ -31,6 +31,8 @@ class RNA_Model(nn.Module):
             heads = HEADS,
             ff_glu = True,
             layer_dropout = 0.1,
+            alibi_pos_bias = True,
+            alibi_num_heads = HEADS
         )
 
         # project in and out
