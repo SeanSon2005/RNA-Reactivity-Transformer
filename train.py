@@ -10,17 +10,17 @@ FILE_NAME = 'weights'
 PATH = 'data/'
 OUT = 'runs/'
 BATCH_SIZE = 64
-NUM_WORKERS = 12
+NUM_WORKERS = 8
 SEED = 2023
 nfolds = 4
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-EPOCHS = 50
+EPOCHS = 32
 MAX_LEARNING_RATE = 5e-4
 WEIGHT_DECAY = 0.05
 
 seed_everything(SEED)
 os.makedirs(OUT, exist_ok=True)
-df = pd.read_parquet(os.path.join(PATH,'train_data_quick.parquet'))
+df = pd.read_csv(os.path.join(PATH,'train_data.csv'))
 
 for fold in [0]: # running multiple folds at kaggle may cause OOM
     ds_train = RNA_Dataset(df, mode='train', fold=fold, nfolds=nfolds)
@@ -44,11 +44,11 @@ for fold in [0]: # running multiple folds at kaggle may cause OOM
     gc.collect()
 
     data = DataLoaders(dl_train,dl_val)
-    model = RNA_Model()   
+    model = RNA_Model2()  
     model = model.to(device)
     learn = Learner(data, model, loss_func=loss,cbs=[GradientClip(3.0)],
                 metrics=[MAE()]).to_fp16() 
 
-    learn.fit_one_cycle(EPOCHS, lr_max=MAX_LEARNING_RATE, wd=WEIGHT_DECAY, pct_start=0.04)
+    learn.fit_one_cycle(EPOCHS, lr_max=MAX_LEARNING_RATE, wd=WEIGHT_DECAY, pct_start=0.02)
     torch.save(learn.model.state_dict(),os.path.join(OUT,f'{FILE_NAME}_{fold}.pth'))
     gc.collect()

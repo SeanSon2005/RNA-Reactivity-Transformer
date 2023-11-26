@@ -10,4 +10,4 @@ m = (df_2A3['SN_filter'].values > SN_DROP) & (df_DMS['SN_filter'].values > SN_DR
 df_2A3 = df_2A3.loc[m].reset_index(drop=True)
 df_DMS = df_DMS.loc[m].reset_index(drop=True)
 
-df.to_parquet('data/train_data_f2.parquet')
+df.to_parquet('data/train_data_F.parquet')

@@ -1,54 +1,12 @@
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-#from x_transformers import Decoder
-#from model import ContinuousTransformerWrapper
+from model import RNA_Model2
 import torch
 import torch.nn as nn
 import math
 from torch.utils.data import Dataset, DataLoader
 import polars as pl
-
-class SinusoidalPosEmb(nn.Module):
-    def __init__(self, dim=16, M=10000):
-        super().__init__()
-        self.dim = dim
-        self.M = M
-
-    def forward(self, x):
-        device = x.device
-        half_dim = self.dim // 2
-        emb = math.log(self.M) / half_dim
-        emb = torch.exp(torch.arange(half_dim, device=device) * (-emb))
-        emb = x[...,None] * emb[None,...]
-        emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
-        return emb
-
-class RNA_Model(nn.Module):
-    def __init__(self, dim=256, depth=16, head_size=32, **kwargs):
-        super().__init__()
-        self.emb = nn.Embedding(4,dim)
-        self.pos_enc = SinusoidalPosEmb(dim)
-        self.transformer = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(d_model=dim, nhead=dim//head_size, dim_feedforward=4*dim,
-                dropout=0.1, activation=nn.GELU(), batch_first=True, norm_first=True), depth)
-        self.proj_out = nn.Linear(dim,2)
-    
-    def forward(self, x0):
-        mask = x0['mask']
-        Lmax = mask.sum(-1).max()
-        mask = mask[:,:Lmax]
-        x = x0['seq'][:,:Lmax]
-        
-        pos = torch.arange(Lmax, device=x.device).unsqueeze(0)
-        pos = self.pos_enc(pos)
-        x = self.emb(x)
-        x = x + pos
-        
-        x = self.transformer(x, src_key_padding_mask=~mask)
-        x = self.proj_out(x)
-        
-        return x
 
 #define device (GPU!)
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -73,8 +31,8 @@ class Test_Dataset(Dataset):
         return {'seq':seq.to(device),'mask':mask.to(device),
                 'seq_len':torch.tensor(self.lens[idx]).to(device)}
     
-model = RNA_Model()
-model.load_state_dict(torch.load("runs/best1.pth"))
+model = RNA_Model2()
+model.load_state_dict(torch.load("runs/best2.pth"))
 model.to(device)
 df = pd.read_csv("data/test_sequences.csv")
 df_len = len(df.index)

@@ -59,6 +59,9 @@ def seed_everything(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = True
 
+def react_to_weight(error):
+    return error
+
 class RNA_Dataset(Dataset):
     def __init__(self, df, mode='train', seed=2023, fold=0, nfolds=4, 
                  mask_only=False, **kwargs):
@@ -72,6 +75,10 @@ class RNA_Dataset(Dataset):
                 shuffle=True).split(df_2A3))[fold][0 if mode=='train' else 1]
         df_2A3 = df_2A3.iloc[split].reset_index(drop=True)
         df_DMS = df_DMS.iloc[split].reset_index(drop=True)
+
+        m = (df_2A3['SN_filter'].values > 0) & (df_DMS['SN_filter'].values > 0)
+        df_2A3 = df_2A3.loc[m].reset_index(drop=True)
+        df_DMS = df_DMS.loc[m].reset_index(drop=True)
         
         self.seq = df_2A3['sequence'].values
         self.L = df_2A3['L'].values
@@ -103,8 +110,8 @@ class RNA_Dataset(Dataset):
         
         react = torch.from_numpy(np.stack([self.react_2A3[idx],
                                            self.react_DMS[idx]],-1))#.type(torch.float32)
-        react_err = torch.from_numpy(np.stack([self.react_err_2A3[idx],
-                                               self.react_err_DMS[idx]],-1))#.type(torch.float32)
+        react_err = torch.from_numpy(np.stack([react_to_weight(self.react_err_2A3[idx]),
+                                               react_to_weight(self.react_err_DMS[idx])],-1))#.type(torch.float32)
         
         return {'seq':torch.from_numpy(seq), 'mask':mask, 
                 'seq_len':torch.tensor(self.L[idx])}, \
@@ -164,9 +171,10 @@ class DeviceDataLoader:
 
 def loss(pred,target):
     p = pred[target['mask'][:,:pred.shape[1]]]
-    y = target['react'][target['mask']].clip(0,1)
-    loss = F.l1_loss(p, y, reduction='none')
-    loss = loss[~torch.isnan(loss)].mean()
+    y = target['react'][target['mask']].clip(0,1) # make reactivities stay between 0 and 1 
+    #e = target['react_error'][target['mask']]
+    loss = F.l1_loss(p, y, reduction='none')# * e # get absolute difference and mult by error
+    loss = loss[~torch.isnan(loss)].mean() # take mean of non-NaN values
     
     return loss
 

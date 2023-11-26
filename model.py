@@ -9,9 +9,10 @@ from einops import rearrange, repeat, pack, unpack
 from typing import List, Optional
 import numpy as np
 import torch.nn.functional as F
+from embedding import CustomEmbedding
 
 DIM = 256
-DEPTH = 20
+DEPTH = 16
 HEADS = 8
 
 # main classes
@@ -25,18 +26,18 @@ class RNA_Model(nn.Module):
         self.post_emb_norm = nn.LayerNorm(DIM) # if post_emb_norm else nn.Identity()
 
         # attention layers
-        self.attn_layers = Decoder(
+        self.attn_layers = Encoder(
             dim = DIM,
             depth = DEPTH,
             heads = HEADS,
             ff_glu = True,
-            layer_dropout = 0.1,
             alibi_pos_bias = True,
-            alibi_num_heads = HEADS
+            alibi_num_heads = HEADS,
+            dropout = 0.1,
         )
 
         # project in and out
-        self.project_in = nn.Embedding(4,DIM)
+        self.project_in = CustomEmbedding(DIM)
         self.project_out = nn.Sequential(
             nn.Linear(DIM,2)
         )
@@ -51,11 +52,11 @@ class RNA_Model(nn.Module):
 
         # embedding and position
         x = self.project_in(x)
-        x = x + self.pos_emb(x)
+        #x = x + self.pos_emb(x)
         x = self.post_emb_norm(x)
 
         # attention
-        x = self.attn_layers(x, mask = mask)
+        x = self.attn_layers(x, self_attn_kv_mask = mask)
         #x = self.attn_layers_torch(x, src_key_padding_mask=~mask)
 
         # project out
@@ -84,22 +85,25 @@ class SinusoidalPosEmb(nn.Module):
         return emb
 
 class RNA_Model2(nn.Module):
-    def __init__(self, dim=256, depth=16, head_size=32, **kwargs):
+    def __init__(self, dim=384, depth=16, head_size=48, **kwargs):
         super().__init__()
-        self.emb = nn.Embedding(4,dim)
+        self.emb = CustomEmbedding(dim,
+                                   conv = False,
+                                   struct = False)
         self.pos_enc = SinusoidalPosEmb(dim)
+
         self.transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(d_model=dim, nhead=dim//head_size, dim_feedforward=4*dim,
                 dropout=0.1, activation=nn.GELU(), batch_first=True, norm_first=True), depth)
         self.proj_out = nn.Sequential(
-            nn.Linear(dim,dim*2),
-            nn.Linear(dim*2,64),
-            nn.Linear(64,2)
+            nn.Linear(dim,2)
         )
     
     def forward(self, x0):
         mask = x0['mask']
-        max_seq_len = torch.max(x0['seq_len'])
+
+        seq_lens = x0['seq_len']
+        max_seq_len = torch.max(seq_lens)
         mask = mask[:,:max_seq_len]
         x = x0['seq'][:,:max_seq_len]
         
