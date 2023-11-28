@@ -2,9 +2,8 @@ import numpy as np
 import pandas as pd
 import torch
 import os
-import random
 from dataloading import *  
-from model import RNA_Model2, RNA_Model
+from model import RNA_Model
 
 FILE_NAME = 'weights'
 PATH = 'data/'
@@ -20,7 +19,7 @@ WEIGHT_DECAY = 0.05
 
 seed_everything(SEED)
 os.makedirs(OUT, exist_ok=True)
-df = pd.read_csv(os.path.join(PATH,'train_data.csv'))
+df = pd.read_parquet(os.path.join(PATH,'train_data_filtered.parquet'))
 
 for fold in [0]: # running multiple folds at kaggle may cause OOM
     ds_train = RNA_Dataset(df, mode='train', fold=fold, nfolds=nfolds)
@@ -44,7 +43,7 @@ for fold in [0]: # running multiple folds at kaggle may cause OOM
     gc.collect()
 
     data = DataLoaders(dl_train,dl_val)
-    model = RNA_Model2()  
+    model = RNA_Model()  
     model = model.to(device)
     learn = Learner(data, model, loss_func=loss,cbs=[GradientClip(3.0)],
                 metrics=[MAE()]).to_fp16() 
