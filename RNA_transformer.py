@@ -1,11 +1,11 @@
-from typing import Optional, Any, Union, Callable
+from typing import Callable, List, Optional, Tuple, Union
 import warnings
 import copy
 import torch
 import torch.nn as nn
 from torch import Tensor
 import torch.nn.functional as F
-from einops import rearrange
+from alibi_attention import AlibiMultiheadAttention
 
 def _generate_square_subsequent_mask(
         sz: int,
@@ -69,23 +69,6 @@ def _detect_is_causal_mask(
             make_causal = False
 
     return make_causal
-
-class AlibiPositionalBias(nn.Module):
-    def __init__(self, heads, total_heads, **kwargs):
-        super().__init__()
-        self.heads = heads
-        self.total_heads = total_heads
-
-        slopes = Tensor(self._get_slopes(heads))
-        slopes = rearrange(slopes, 'h -> h 1 1')
-        self.register_buffer('slopes', slopes, persistent = False)
-        self.register_buffer('bias', None, persistent = False)
-    
-    def get_bias(self, i, j, device):
-        i_arange = torch.arange(j - i, j, device = device)
-        j_arange = torch.arange(j, device = device)
-        bias = -torch.abs(rearrange(j_arange, 'j -> 1 1 j') - rearrange(i_arange, 'i -> 1 i 1'))
-        return bias
 
 class TransformerEncoder(nn.Module):
     r"""TransformerEncoder is a stack of N encoder layers. Users can build the
@@ -277,7 +260,7 @@ class TransformerEncoderLayer(nn.Module):
                  bias: bool = True, device=None, dtype=None) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
-        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout,
+        self.self_attn = AlibiMultiheadAttention(d_model, nhead, dropout=dropout,
                                             bias=bias, batch_first=batch_first,
                                             **factory_kwargs)
         # Implementation of Feedforward model

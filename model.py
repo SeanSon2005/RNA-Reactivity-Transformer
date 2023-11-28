@@ -3,11 +3,12 @@ import torch.nn as nn
 import math
 import numpy as np
 from embedding import CustomEmbedding
-from custom_transformer import TransformerEncoder, TransformerEncoderLayer
+from RNA_transformer import TransformerEncoder, TransformerEncoderLayer
+from x_transformers import Encoder
 
 DIM = 512
 DEPTH = 16
-HEADS = 8
+HEAD_SIZE = 64
 
 # main classes
 class SinusoidalPosEmb(nn.Module):
@@ -26,9 +27,9 @@ class SinusoidalPosEmb(nn.Module):
         return emb
 
 class RNA_Model(nn.Module):
-    def __init__(self, dim=DIM, depth=DEPTH, head_size=HEADS, **kwargs):
+    def __init__(self, dim=DIM, depth=DEPTH, head_size=HEAD_SIZE, **kwargs):
         super().__init__()
-        self.emb = CustomEmbedding(dim, struct = False)
+        self.emb = nn.Embedding(4,dim)
         self.pos_enc = SinusoidalPosEmb(dim)
 
         self.transformer = TransformerEncoder(
@@ -55,3 +56,42 @@ class RNA_Model(nn.Module):
         x = self.proj_out(x)
         
         return x
+
+class RNA_Model2(nn.Module):
+    def __init__(self, dim=DIM, depth=DEPTH, head_size=HEAD_SIZE, **kwargs):
+        super().__init__()
+        self.emb = nn.Embedding(4,dim)
+
+        self.transformer = Encoder(
+            dim=dim,
+            depth=depth,
+            heads=dim//head_size,
+            ff_glu = True,
+            dropout = 0.1,
+        )
+
+        self.proj_out = nn.Sequential(
+            nn.Linear(dim,2)
+        )
+    
+    def forward(self, x0):
+        mask = x0['mask']
+
+        seq_lens = x0['seq_len']
+        max_seq_len = torch.max(seq_lens)
+        mask = mask[:,:max_seq_len]
+        x = x0['seq'][:,:max_seq_len]
+        
+        x = self.emb(x)
+        
+        x = self.transformer(x, mask = mask)
+        x = self.proj_out(x)
+        
+        return x
+
+if __name__ == "__main__":    
+    model = RNA_Model()
+    print(sum(p.numel() for p in model.parameters() if p.requires_grad))
+
+    model = RNA_Model2()
+    print(sum(p.numel() for p in model.parameters() if p.requires_grad))
