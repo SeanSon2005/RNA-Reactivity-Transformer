@@ -1,4 +1,4 @@
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Callable, Optional, Union
 import warnings
 import copy
 import torch
@@ -123,7 +123,6 @@ class TransformerEncoder(nn.Module):
         if enable_nested_tensor and why_not_sparsity_fast_path:
             warnings.warn(f"enable_nested_tensor is True, but self.use_nested_tensor is False because {why_not_sparsity_fast_path}")
             self.use_nested_tensor = False
-
 
     def forward(
             self,
@@ -260,6 +259,7 @@ class TransformerEncoderLayer(nn.Module):
                  bias: bool = True, device=None, dtype=None) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
+
         self.self_attn = AlibiMultiheadAttention(d_model, nhead, dropout=dropout,
                                             bias=bias, batch_first=batch_first,
                                             **factory_kwargs)

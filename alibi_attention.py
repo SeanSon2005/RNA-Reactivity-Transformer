@@ -1,4 +1,4 @@
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -6,7 +6,7 @@ from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 from torch.nn.init import constant_, xavier_normal_, xavier_uniform_
 import torch.nn.functional as F
 from torch.overrides import (
-    has_torch_function, has_torch_function_unary, has_torch_function_variadic,
+    has_torch_function,
     handle_torch_function)
 import math
     
@@ -17,22 +17,17 @@ class AlibiMultiheadAttention(nn.Module):
     bias_v: Optional[torch.Tensor]
 
     def __init__(self, embed_dim, num_heads, dropout=0., bias=True, add_bias_kv=False, add_zero_attn=False,
-                 kdim=None, vdim=None, batch_first=False, device=None, dtype=None) -> None:
-        if embed_dim <= 0 or num_heads <= 0:
-            raise ValueError(
-                f"embed_dim and num_heads must be greater than 0,"
-                f" got embed_dim={embed_dim} and num_heads={num_heads} instead"
-            )
+                 kdim=None, vdim=None, batch_first=True, device=None, dtype=None) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
         self.embed_dim = embed_dim
+        self.batch_first = batch_first
         self.kdim = kdim if kdim is not None else embed_dim
         self.vdim = vdim if vdim is not None else embed_dim
         self._qkv_same_embed_dim = self.kdim == embed_dim and self.vdim == embed_dim
 
         self.num_heads = num_heads
         self.dropout = dropout
-        self.batch_first = batch_first
         self.head_dim = embed_dim // num_heads
         assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
 
@@ -60,9 +55,10 @@ class AlibiMultiheadAttention(nn.Module):
             self.bias_k = self.bias_v = None
 
         self.add_zero_attn = add_zero_attn
-        self.register_buffer("m", self.get_alibi_slope(self.num_heads))
-
         self._reset_parameters()
+
+        # calculate alibi slopes
+        self.register_buffer('alibi_slope', self.get_slopes(num_heads=num_heads))
 
     def _reset_parameters(self):
         if self._qkv_same_embed_dim:
@@ -107,8 +103,6 @@ class AlibiMultiheadAttention(nn.Module):
            or (key_padding_mask is not None) and torch.is_floating_point(key_padding_mask)):
             why_not_fast_path = "floating-point masks are not supported for fast path."
 
-        is_batched = query.dim() == 3
-
         key_padding_mask = F._canonical_mask(
             mask=key_padding_mask,
             mask_name="key_padding_mask",
@@ -126,10 +120,7 @@ class AlibiMultiheadAttention(nn.Module):
             check_other=False,
         )
 
-
-        if not is_batched:
-            why_not_fast_path = f"input not batched; expected query.dim() of 3 but got {query.dim()}"
-        elif query is not key or key is not value:
+        if query is not key or key is not value:
             # When lifting this restriction, don't forget to either
             # enforce that the dtypes all match or test cases where
             # they don't!
@@ -145,8 +136,6 @@ class AlibiMultiheadAttention(nn.Module):
             why_not_fast_path = "training is enabled"
         elif (self.num_heads % 2) != 0:
             why_not_fast_path = "self.num_heads is not even"
-        elif not self.batch_first:
-            why_not_fast_path = "batch_first was not True"
         elif self.bias_k is not None:
             why_not_fast_path = "self.bias_k was not None"
         elif self.bias_v is not None:
@@ -206,16 +195,14 @@ class AlibiMultiheadAttention(nn.Module):
         assert not any_nested, ("MultiheadAttention does not support NestedTensor outside of its fast path. " +
                                 f"The fast path was not hit because {why_not_fast_path}")
 
-        if self.batch_first and is_batched:
-            # make sure that the transpose op does not affect the "is" property
-            if key is value:
-                if query is key:
-                    query = key = value = query.transpose(1, 0)
-                else:
-                    query, key = (x.transpose(1, 0) for x in (query, key))
-                    value = key
+        if key is value:
+            if query is key:
+                query = key = value = query.transpose(1, 0)
             else:
-                query, key, value = (x.transpose(1, 0) for x in (query, key, value))
+                query, key = (x.transpose(1, 0) for x in (query, key))
+                value = key
+        else:
+            query, key, value = (x.transpose(1, 0) for x in (query, key, value))
 
         if not self._qkv_same_embed_dim:
             attn_output, attn_output_weights = self.multi_head_attention_forward(
@@ -243,10 +230,9 @@ class AlibiMultiheadAttention(nn.Module):
                 attn_mask=attn_mask,
                 average_attn_weights=average_attn_weights,
                 is_causal=is_causal)
-        if self.batch_first and is_batched:
-            return attn_output.transpose(1, 0), attn_output_weights
-        else:
-            return attn_output, attn_output_weights
+
+        return attn_output.transpose(1, 0), attn_output_weights
+
 
     def merge_masks(self, attn_mask: Optional[Tensor], key_padding_mask: Optional[Tensor],
                     query: Tensor) -> Tuple[Optional[Tensor], Optional[int]]:
@@ -422,19 +408,6 @@ class AlibiMultiheadAttention(nn.Module):
                 static_v=static_v,
                 average_attn_weights=average_attn_weights,
             )
-
-        is_batched = F._mha_shape_check(query, key, value, key_padding_mask, attn_mask, num_heads)
-
-        # For unbatched input, we unsqueeze at the expected batch-dim to pretend that the input
-        # is batched, run the computation and before returning squeeze the
-        # batch dimension so that the output doesn't carry this temporary batch dimension.
-        if not is_batched:
-            # unsqueeze if the input is unbatched
-            query = query.unsqueeze(1)
-            key = key.unsqueeze(1)
-            value = value.unsqueeze(1)
-            if key_padding_mask is not None:
-                key_padding_mask = key_padding_mask.unsqueeze(0)
 
         # set up shape vars
         tgt_len, bsz, embed_dim = query.shape
@@ -617,10 +590,6 @@ class AlibiMultiheadAttention(nn.Module):
             if average_attn_weights:
                 attn_output_weights = attn_output_weights.mean(dim=1)
 
-            if not is_batched:
-                # squeeze the output if input was unbatched
-                attn_output = attn_output.squeeze(1)
-                attn_output_weights = attn_output_weights.squeeze(0)
             return attn_output, attn_output_weights
         else:
             # attn_mask can be either (L,S) or (N*num_heads, L, S)
@@ -641,22 +610,20 @@ class AlibiMultiheadAttention(nn.Module):
 
             attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
             attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
-            if not is_batched:
-                # squeeze the output if input was unbatched
-                attn_output = attn_output.squeeze(1)
+
             return attn_output, None
         
-    def get_relative_positions(self, seq_len: int) -> torch.tensor:
+    def get_slopes(self, num_heads):
+        x = (2 ** 8) ** (1 / num_heads)
+        return (torch.tensor([1 / x ** (i + 1) for i in range(num_heads)])
+                .unsqueeze(-1)
+                .unsqueeze(-1))
+        
+    def get_relative_positions(self, seq_len: int) -> torch.Tensor:
         x = torch.arange(seq_len, device='cuda')[None, :]
         y = torch.arange(seq_len, device='cuda')[:, None]
         return x - y
-    def get_alibi_slope(self, num_heads):
-        x = (2 ** 8) ** (1 / num_heads)
-        return (
-            torch.tensor([1 / x ** (i + 1) for i in range(num_heads)])
-            .unsqueeze(-1)
-            .unsqueeze(-1)
-        )
+    
     def scaled_dot_product_attention(self, query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None) -> torch.Tensor:
         # Efficient implementation equivalent to the following:
         L, S = query.size(-2), key.size(-2)
@@ -674,11 +641,13 @@ class AlibiMultiheadAttention(nn.Module):
             else:
                 attn_bias = torch.zeros_like(attn_mask, dtype=query.dtype)
                 attn_bias += attn_mask
-        attn_weight = query @ key.transpose(-2, -1) * scale_factor
-        attn_weight += attn_bias
+
         # add alibi bias
-        alibi_bias = (self.m * self.get_relative_positions(S)).unsqueeze(0)
-        attn_weight += alibi_bias
+        #alibi_bias = (self.alibi_slope * self.get_relative_positions(S)).unsqueeze(0)
+
+        attn_weight = query @ key.transpose(-2, -1) * scale_factor
+        attn_weight += (attn_bias)
+    
         attn_weight = torch.softmax(attn_weight, dim=-1)
         attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
         return attn_weight @ value
