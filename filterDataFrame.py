@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 
-ERROR_DROP = 0.12
+ERROR_DROP = 1.5
 ROW_MAX_NANS = 206
 
 

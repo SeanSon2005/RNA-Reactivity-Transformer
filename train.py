@@ -13,7 +13,8 @@ NUM_WORKERS = 8
 SEED = 2023
 nfolds = 4
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-EPOCHS = 25
+EPOCHS_PER_CYCLE = 25
+CYCLES = 1
 MAX_LEARNING_RATE = 5e-4
 WEIGHT_DECAY = 0.05
 
@@ -48,6 +49,8 @@ for fold in [0]: # running multiple folds at kaggle may cause OOM
     learn = Learner(data, model, loss_func=loss,cbs=[GradientClip(3.0)],
                 metrics=[MAE()]).to_fp16() 
 
-    learn.fit_one_cycle(EPOCHS, lr_max=MAX_LEARNING_RATE, wd=WEIGHT_DECAY, pct_start=0.02)
-    torch.save(learn.model.state_dict(),os.path.join(OUT,f'{FILE_NAME}_{fold}.pth'))
+    for cycle_idx in range(CYCLES):
+        print("Cycle: " + str(cycle_idx+1))
+        learn.fit_one_cycle(EPOCHS_PER_CYCLE, lr_max=MAX_LEARNING_RATE, wd=WEIGHT_DECAY, pct_start=0.02)
+        torch.save(learn.model.state_dict(),os.path.join(OUT,f'{FILE_NAME}_.pth'))
     gc.collect()
