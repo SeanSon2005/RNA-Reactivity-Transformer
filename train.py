@@ -13,7 +13,7 @@ NUM_WORKERS = 8
 SEED = 2023
 nfolds = 4
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-EPOCHS = 32
+EPOCHS = 25
 MAX_LEARNING_RATE = 5e-4
 WEIGHT_DECAY = 0.05
 

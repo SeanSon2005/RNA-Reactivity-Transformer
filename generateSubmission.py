@@ -1,10 +1,9 @@
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from model import RNA_Model2
+from model import RNA_Model
 import torch
 import torch.nn as nn
-import math
 from torch.utils.data import Dataset, DataLoader
 import polars as pl
 
@@ -31,8 +30,8 @@ class Test_Dataset(Dataset):
         return {'seq':seq.to(device),'mask':mask.to(device),
                 'seq_len':torch.tensor(self.lens[idx]).to(device)}
     
-model = RNA_Model2()
-model.load_state_dict(torch.load("runs/best2.pth"))
+model = RNA_Model()
+model.load_state_dict(torch.load("runs/best5.pth"))
 model.to(device)
 df = pd.read_csv("data/test_sequences.csv")
 df_len = len(df.index)
@@ -62,5 +61,6 @@ df = pl.DataFrame(
     data=[ids, preds_dms, preds_2a3],
     schema=schema
 )
-df.write_csv('submissions/submission.csv', float_precision=4)
+#df.write_csv('submissions/submission.csv', float_precision=4)
+df.write_parquet('submissions/submission.parquet')
         

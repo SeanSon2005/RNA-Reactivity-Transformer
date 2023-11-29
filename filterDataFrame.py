@@ -2,10 +2,17 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 
-ERROR_DROP = 0.1
+ERROR_DROP = 0.12
 ROW_MAX_NANS = 206
 
-df = pd.read_parquet('data/train_data.parquet')
+
+try:
+    df = pd.read_parquet('data/train_data.parquet')
+except:
+    try:
+        df = pd.read_csv('data/train_data.csv')
+    except:
+        raise Exception("data/train_data.csv not found")
 
 for i in tqdm(range(1, 207)):
     react_column_name = "reactivity_"+str(i).zfill(4)

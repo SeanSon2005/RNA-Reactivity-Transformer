@@ -6,9 +6,9 @@ from embedding import CustomEmbedding
 from RNA_transformer import TransformerEncoder, TransformerEncoderLayer
 from x_transformers import Encoder
 
-DIM = 512
+DIM = 768
 DEPTH = 16
-HEAD_SIZE = 64
+HEAD_SIZE = 96
 
 # main classes
 class SinusoidalPosEmb(nn.Module):
