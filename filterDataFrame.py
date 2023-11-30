@@ -15,6 +15,10 @@ class GenerateFilteredData():
     def generate(self, save=False):
         df = self.df.copy(deep=True)
 
+        # save before filtered
+        if save:
+            df.to_parquet('data/train_data.parquet')
+
         df_2A3 = df.loc[df.experiment_type=='2A3_MaP']
         df_DMS = df.loc[df.experiment_type=='DMS_MaP']
 
@@ -24,6 +28,7 @@ class GenerateFilteredData():
 
         df = pd.concat([df_2A3,df_DMS])
 
+        # save after filtered
         if save:
             df.to_parquet('data/train_data_filtered.parquet')
         else:
