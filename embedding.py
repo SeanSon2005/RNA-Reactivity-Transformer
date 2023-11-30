@@ -5,15 +5,14 @@ import numpy as np
 class CustomEmbedding(nn.Module):
     def __init__(self, 
                 emb_dim,
-                struct = False,
-                kernel_size=5):
+                conv_kernel_size):
         super().__init__()
-        self.struct = struct
-        
-        if struct:
-            self.zero_padder = nn.ZeroPad1d(kernel_size//2)
-            self.kernel_size = kernel_size
-            self.base_convert = torch.tensor([4**(kernel_size-1-x) for x in range(kernel_size)]).to('cuda')
+        self.struct = (conv_kernel_size > 2)
+
+        if self.struct:
+            self.zero_padder = nn.ZeroPad1d(conv_kernel_size//2)
+            self.kernel_size = conv_kernel_size
+            self.base_convert = torch.tensor([4**(conv_kernel_size-1-x) for x in range(conv_kernel_size)]).to('cuda')
             self.max_tokens = int(torch.sum(self.base_convert).detach()) * 4
             self.emb = nn.Embedding(self.max_tokens, emb_dim)
         else:

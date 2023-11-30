@@ -1,19 +1,15 @@
 import pandas as pd
 import os, gc
 import numpy as np
-from tqdm.notebook import tqdm
-import math
-from sklearn.model_selection import KFold
+from tqdm import tqdm
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import polars as pl
 from model import RNA_Model
 
-MODELS = ['runs/run_1/best.pth']
+MODELS = ['runs/run_2/best.pth']
 PATH = 'data/'
-bs = 256
+bs = 512
 num_workers = 8
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -41,7 +37,7 @@ class RNA_Dataset_Test(Dataset):
         seq = np.pad(seq,(0,self.Lmax-L))
         ids = np.pad(ids,(0,self.Lmax-L), constant_values=-1)
         
-        return {'seq':torch.from_numpy(seq), 'mask':mask}, \
+        return {'seq':torch.from_numpy(seq),'seq_len':torch.tensor(L),'mask':mask}, \
                {'ids':ids}
             
 def dict_to(x, device='cuda'):
@@ -64,14 +60,14 @@ class DeviceDataLoader:
     
 df_test = pd.read_csv(os.path.join(PATH,'test_sequences.csv'))
 ds = RNA_Dataset_Test(df_test)
-dl = DeviceDataLoader(torch.utils.data.DataLoader(ds, batch_size=bs, 
+dl = DeviceDataLoader(DataLoader(ds, batch_size=bs, 
                shuffle=False, drop_last=False, num_workers=num_workers), device)
 del df_test
 gc.collect()
 
 models = []
 for m in MODELS:
-    model = RNA_Model()   
+    model = RNA_Model(dim=512, depth=16, heads=8, conv_kernel_size=0)
     model = model.to(device)
     model.load_state_dict(torch.load(m,map_location=torch.device('cpu')))
     model.eval()
