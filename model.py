@@ -6,10 +6,6 @@ from embedding import CustomEmbedding
 from RNA_transformer import TransformerEncoder, TransformerEncoderLayer
 from x_transformers import Encoder
 
-DIM = 512
-DEPTH = 16
-HEAD_SIZE = 64
-
 # main classes
 class SinusoidalPosEmb(nn.Module):
     def __init__(self, dim=16, M=10000):
@@ -27,16 +23,17 @@ class SinusoidalPosEmb(nn.Module):
         return emb
 
 class RNA_Model(nn.Module):
-    def __init__(self, dim=DIM, depth=DEPTH, head_size=HEAD_SIZE, **kwargs):
+    def __init__(self, dim, depth, heads, **kwargs):
         super().__init__()
         self.emb = nn.Embedding(4,dim)
         self.pos_enc = SinusoidalPosEmb(dim)
 
         self.transformer = TransformerEncoder(
-            TransformerEncoderLayer(d_model=dim, nhead=dim//head_size, dim_feedforward=4*dim,
+            TransformerEncoderLayer(d_model=dim, nhead=heads, dim_feedforward=4*dim,
                 dropout=0.1, activation=nn.GELU(), batch_first=True, norm_first=True), depth)
         self.proj_out = nn.Sequential(
-            nn.Linear(dim,2)
+            nn.Linear(dim,dim//2),
+            nn.Linear(dim//2,2)
         )
     
     def forward(self, x0):

@@ -1,66 +1,100 @@
-import numpy as np
 import pandas as pd
-from tqdm import tqdm
-from model import RNA_Model
+import os, gc
+import numpy as np
+from tqdm.notebook import tqdm
+import math
+from sklearn.model_selection import KFold
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import polars as pl
+from model import RNA_Model
 
-#define device (GPU!)
-device = "cuda" if torch.cuda.is_available() else "cpu"
+MODELS = ['runs/run_1/best.pth']
+PATH = 'data/'
+bs = 256
+num_workers = 8
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-MAX_SEQ_LEN = 457
-
-class Test_Dataset(Dataset):
-    def __init__(self, df):
+class RNA_Dataset_Test(Dataset):
+    def __init__(self, df, mask_only=False, **kwargs):
+        self.seq_map = {'A':0,'C':1,'G':2,'U':3}
         df['L'] = df.sequence.apply(len)
-        self.lens = df['L'].values
-        seq_map = {'A':0,'C':1,'G':2,'U':3}
-        self.seqs = (df["sequence"].apply(lambda x: [seq_map[i] for i in x])).values
+        self.Lmax = df['L'].max()
+        self.df = df
+        self.mask_only = mask_only
+        
     def __len__(self):
-        return len(self.seqs)  
+        return len(self.df)  
     
     def __getitem__(self, idx):
-        seq = np.array(self.seqs[idx])
-        seq = np.pad(seq,(0,MAX_SEQ_LEN-self.lens[idx]))
-        seq = torch.from_numpy(seq)
-        mask = torch.zeros(MAX_SEQ_LEN, dtype=torch.bool)
-        mask[:self.lens[idx]] = True
-        return {'seq':seq.to(device),'mask':mask.to(device),
-                'seq_len':torch.tensor(self.lens[idx]).to(device)}
+        id_min, id_max, seq = self.df.loc[idx, ['id_min','id_max','sequence']]
+        mask = torch.zeros(self.Lmax, dtype=torch.bool)
+        L = len(seq)
+        mask[:L] = True
+        if self.mask_only: return {'mask':mask},{}
+        ids = np.arange(id_min,id_max+1)
+        
+        seq = [self.seq_map[s] for s in seq]
+        seq = np.array(seq)
+        seq = np.pad(seq,(0,self.Lmax-L))
+        ids = np.pad(ids,(0,self.Lmax-L), constant_values=-1)
+        
+        return {'seq':torch.from_numpy(seq), 'mask':mask}, \
+               {'ids':ids}
+            
+def dict_to(x, device='cuda'):
+    return {k:x[k].to(device) for k in x}
+
+def to_device(x, device='cuda'):
+    return tuple(dict_to(e,device) for e in x)
+
+class DeviceDataLoader:
+    def __init__(self, dataloader, device='cuda'):
+        self.dataloader = dataloader
+        self.device = device
     
-model = RNA_Model()
-model.load_state_dict(torch.load("runs/best5.pth"))
-model.to(device)
-df = pd.read_csv("data/test_sequences.csv")
-df_len = len(df.index)
+    def __len__(self):
+        return len(self.dataloader)
+    
+    def __iter__(self):
+        for batch in self.dataloader:
+            yield tuple(dict_to(x, self.device) for x in batch)
+    
+df_test = pd.read_csv(os.path.join(PATH,'test_sequences.csv'))
+ds = RNA_Dataset_Test(df_test)
+dl = DeviceDataLoader(torch.utils.data.DataLoader(ds, batch_size=bs, 
+               shuffle=False, drop_last=False, num_workers=num_workers), device)
+del df_test
+gc.collect()
 
-dataset = Test_Dataset(df)
-dataloader = DataLoader(dataset, batch_size=512, shuffle=False, drop_last=False)
+models = []
+for m in MODELS:
+    model = RNA_Model()   
+    model = model.to(device)
+    model.load_state_dict(torch.load(m,map_location=torch.device('cpu')))
+    model.eval()
+    models.append(model)
 
-SUB_LEN = 269796671
-ids = np.int64(np.arange(SUB_LEN))
-preds_dms = np.zeros(SUB_LEN)
-preds_2a3 = np.zeros(SUB_LEN)
+ids,preds = [],[]
+for x,y in tqdm(dl):
+    with torch.no_grad(),torch.cuda.amp.autocast():
+        p = torch.stack([torch.nan_to_num(model(x)) for model in models]
+                        ,0).mean(0).clip(0,1)
+        
+    for idx, mask, pi in zip(y['ids'].cpu(), x['mask'].cpu(), p.cpu()):
+        ids.append(idx[mask])
+        preds.append(pi[mask[:pi.shape[0]]])
 
-ind = 0
-for data in tqdm(dataloader):
-    with torch.no_grad():
-        pred = model(data)
-        output = pred[data['mask'][:,:pred.shape[1]]].cpu().numpy()
-        output_ind = ind + output.shape[0]
-        preds_dms[ind:output_ind] = output[:,1]
-        preds_2a3[ind:output_ind] = output[:,0]
-        ind = output_ind
+ids = torch.concat(ids)
+preds = torch.concat(preds)
 
 schema = {k:pl.Float32 for k in ['id', 'reactivity_DMS_MaP', 'reactivity_2A3_MaP']}
 schema['id'] = pl.Int64
-
 df = pl.DataFrame(
-    data=[ids, preds_dms, preds_2a3],
+    data=[ids.numpy(), preds[:,1].numpy(), preds[:,0].numpy()],
     schema=schema
 )
-#df.write_csv('submissions/submission.csv', float_precision=4)
 df.write_parquet('submissions/submission.parquet')
         

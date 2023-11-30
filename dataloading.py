@@ -73,9 +73,9 @@ class RNA_Dataset(Dataset):
         df_2A3 = df_2A3.iloc[split].reset_index(drop=True)
         df_DMS = df_DMS.iloc[split].reset_index(drop=True)
 
-        # m = (df_2A3['SN_filter'].values > 0) & (df_DMS['SN_filter'].values > 0)
-        # df_2A3 = df_2A3.loc[m].reset_index(drop=True)
-        # df_DMS = df_DMS.loc[m].reset_index(drop=True)
+        m = (df_2A3['SN_filter'].values > 0) & (df_DMS['SN_filter'].values > 0)
+        df_2A3 = df_2A3.loc[m].reset_index(drop=True)
+        df_DMS = df_DMS.loc[m].reset_index(drop=True)
         
         self.seq = df_2A3['sequence'].values
         self.L = df_2A3['L'].values
@@ -106,7 +106,7 @@ class RNA_Dataset(Dataset):
         seq = np.pad(seq,(0,self.Lmax-len(seq)))
         
         react = torch.from_numpy(np.stack([self.react_2A3[idx],
-                                           self.react_DMS[idx]],-1))#.type(torch.float32)
+                                           self.react_DMS[idx]],-1)).type(torch.float32)
         
         #bpp = torch.from_numpy(np.load('data/base_pairs/base_pair'+str(idx)+'.npy')).type(torch.float32)
         

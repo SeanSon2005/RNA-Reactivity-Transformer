@@ -1,7 +1,7 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 
-df=pd.read_csv("submissions/submission.csv")
+df=pd.read_parquet("submissions/submission.parquet")
 
 #some parameters
 font_size=6
