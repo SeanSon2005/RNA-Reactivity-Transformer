@@ -127,6 +127,7 @@ class TransformerEncoder(nn.Module):
     def forward(
             self,
             src: Tensor,
+            bpps: Tensor = None,
             mask: Optional[Tensor] = None,
             src_key_padding_mask: Optional[Tensor] = None,
             is_causal: Optional[bool] = None) -> Tensor:
@@ -225,7 +226,7 @@ class TransformerEncoder(nn.Module):
         is_causal = _detect_is_causal_mask(mask, is_causal, seq_len)
 
         for mod in self.layers:
-            output = mod(output, src_mask=mask, is_causal=is_causal, src_key_padding_mask=src_key_padding_mask_for_layers)
+            output = mod(output, bpps=bpps, src_mask=mask, is_causal=is_causal, src_key_padding_mask=src_key_padding_mask_for_layers)
 
         if convert_to_nested:
             output = output.to_padded_tensor(0., src.size())
@@ -297,6 +298,7 @@ class TransformerEncoderLayer(nn.Module):
     def forward(
             self,
             src: Tensor,
+            bpps: Tensor,
             src_mask: Optional[Tensor] = None,
             src_key_padding_mask: Optional[Tensor] = None,
             is_causal: bool = False) -> Tensor:
@@ -411,18 +413,19 @@ class TransformerEncoderLayer(nn.Module):
 
         x = src
         if self.norm_first:
-            x = x + self._sa_block(self.norm1(x), src_mask, src_key_padding_mask, is_causal=is_causal)
+            x = x + self._sa_block(self.norm1(x), bpps, src_mask, src_key_padding_mask, is_causal=is_causal)
             x = x + self._ff_block(self.norm2(x))
         else:
-            x = self.norm1(x + self._sa_block(x, src_mask, src_key_padding_mask, is_causal=is_causal))
+            x = self.norm1(x + self._sa_block(x, bpps, src_mask, src_key_padding_mask, is_causal=is_causal))
             x = self.norm2(x + self._ff_block(x))
 
         return x
 
     # self-attention block
-    def _sa_block(self, x: Tensor,
+    def _sa_block(self, x: Tensor, bpps: Tensor,
                   attn_mask: Optional[Tensor], key_padding_mask: Optional[Tensor], is_causal: bool = False) -> Tensor:
         x = self.self_attn(x, x, x,
+                           bpps=bpps,
                            attn_mask=attn_mask,
                            key_padding_mask=key_padding_mask,
                            need_weights=False, is_causal=is_causal)[0]

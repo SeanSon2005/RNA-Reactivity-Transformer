@@ -6,8 +6,9 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import polars as pl
 from model import RNA_Model
+from scipy.sparse import csr_matrix, load_npz
 
-MODELS = ['runs/run_2/best.pth']
+MODELS = ['runs/run_3/best.pth']
 PATH = 'data/'
 bs = 512
 num_workers = 8
@@ -25,7 +26,7 @@ class RNA_Dataset_Test(Dataset):
         return len(self.df)  
     
     def __getitem__(self, idx):
-        id_min, id_max, seq = self.df.loc[idx, ['id_min','id_max','sequence']]
+        id_min, id_max, seq, seq_id = self.df.loc[idx, ['id_min','id_max','sequence','sequence_id']]
         mask = torch.zeros(self.Lmax, dtype=torch.bool)
         L = len(seq)
         mask[:L] = True
@@ -34,10 +35,14 @@ class RNA_Dataset_Test(Dataset):
         
         seq = [self.seq_map[s] for s in seq]
         seq = np.array(seq)
-        seq = np.pad(seq,(0,self.Lmax-L))
-        ids = np.pad(ids,(0,self.Lmax-L), constant_values=-1)
+        pad_amnt = self.Lmax-L
+        seq = np.pad(seq,(0,pad_amnt))
+        ids = np.pad(ids,(0,pad_amnt), constant_values=-1)
+
+        bpp_mat = load_npz('data/bpps_test/'+seq_id+'.npz').toarray()
+        bpps = torch.from_numpy(np.pad(bpp_mat,((0,pad_amnt),(0,pad_amnt)),'constant'))
         
-        return {'seq':torch.from_numpy(seq),'seq_len':torch.tensor(L),'mask':mask}, \
+        return {'seq':torch.from_numpy(seq),'seq_len':torch.tensor(L),'mask':mask,'bpps':bpps}, \
                {'ids':ids}
             
 def dict_to(x, device='cuda'):
@@ -67,7 +72,7 @@ gc.collect()
 
 models = []
 for m in MODELS:
-    model = RNA_Model(dim=512, depth=16, heads=8, conv_kernel_size=0)
+    model = RNA_Model(dim=768, depth=16, heads=8, conv_kernel_size=0, dropout=0.1)
     model = model.to(device)
     model.load_state_dict(torch.load(m,map_location=torch.device('cpu')))
     model.eval()

@@ -10,6 +10,8 @@ from torch.utils.data import Dataset, DataLoader
 from fastai.vision.all import *
 import fastai
 
+from scipy.sparse import csr_matrix, load_npz
+
 def flatten(o):
     "Concatenate all collections and items as a generator"
     for item in o:
@@ -78,6 +80,7 @@ class RNA_Dataset(Dataset):
         df_DMS = df_DMS.loc[m].reset_index(drop=True)
         
         self.seq = df_2A3['sequence'].values
+        self.seq_id = df_2A3['sequence_id'].values
         self.L = df_2A3['L'].values
         
         self.react_2A3 = df_2A3[[c for c in df_2A3.columns if \
@@ -103,16 +106,22 @@ class RNA_Dataset(Dataset):
         seq = np.array(seq)
         mask = torch.zeros(self.Lmax, dtype=torch.bool)
         mask[:len(seq)] = True
-        seq = np.pad(seq,(0,self.Lmax-len(seq)))
+        pad_amnt = self.Lmax-len(seq)
+        seq = np.pad(seq,(0,pad_amnt))
         
         react = torch.from_numpy(np.stack([self.react_2A3[idx],
                                            self.react_DMS[idx]],-1)).type(torch.float32)
         
-        #bpp = torch.from_numpy(np.load('data/base_pairs/base_pair'+str(idx)+'.npy')).type(torch.float32)
+        react_err = torch.from_numpy(np.stack([self.react_err_2A3[idx],
+                                                 self.react_err_DMS[idx]],-1)).type(torch.float32)
         
+        bpp_mat = load_npz('data/bpps/'+self.seq_id[idx]+'.npz').toarray()
+        bpps = torch.from_numpy(np.pad(bpp_mat,((0,pad_amnt),(0,pad_amnt)),'constant'))
+    
         return {'seq':torch.from_numpy(seq), 'mask':mask, 
-                'seq_len':torch.tensor(self.L[idx])}, \
-               {'react':react,'mask':mask}
+                'seq_len':torch.tensor(self.L[idx]),
+                'bpps':bpps}, \
+               {'react':react, 'react_err':react_err, 'mask':mask}
     
 class LenMatchBatchSampler(torch.utils.data.BatchSampler):
     def __iter__(self):
@@ -167,27 +176,38 @@ class DeviceDataLoader:
 
 def loss(pred,target):
     p = pred[target['mask'][:,:pred.shape[1]]]
-    y = target['react'][target['mask']].clip(0,1) # make reactivities stay between 0 and 1 
-    loss = F.l1_loss(p, y, reduction='none')      # get absolute difference and mult by error
-    loss = loss[~torch.isnan(loss)].mean()        # take mean of non-NaN values
-    return loss
+    p1 = p[:,:2] # pred react
+    p2 = p[:,2:] # pred error
+    y = target['react'][target['mask']].clip(0,1) # make reactivities stay between 0 and 1
+    e = target['react_err'][target['mask']] # get error
+    loss1 = F.l1_loss(p1, y, reduction='none') 
+    loss2 = F.l1_loss(p2, e, reduction='none')
+    loss1 = loss1[~torch.isnan(loss1)].mean()        # take mean of non-NaN values
+    loss2 = loss2[~torch.isnan(loss2)].mean()
+    return loss1+loss2
 
 class MAE(Metric):
     def __init__(self): 
         self.reset()
         
     def reset(self): 
-        self.x,self.y = [],[]
+        self.x,self.y,self.e = [],[],[]
         
     def accumulate(self, learn):
         x = learn.pred[learn.y['mask'][:,:learn.pred.shape[1]]]
         y = learn.y['react'][learn.y['mask']].clip(0,1)
+        e = learn.y['react_err'][learn.y['mask']] # get error
         self.x.append(x)
         self.y.append(y)
+        self.e.append(e)
 
     @property
     def value(self):
-        x,y = torch.cat(self.x,0),torch.cat(self.y,0)
-        loss = F.l1_loss(x, y, reduction='none')
-        loss = loss[~torch.isnan(loss)].mean()
-        return loss
+        x,y,e = torch.cat(self.x,0),torch.cat(self.y,0),torch.cat(self.e,0)
+        x1 = x[:,:2]
+        x2 = x[:,2:]
+        loss1 = F.l1_loss(x1, y, reduction='none')
+        loss2 = F.l1_loss(x2, e, reduction='none')
+        loss1 = loss1[~torch.isnan(loss1)].mean()
+        loss2 = loss2[~torch.isnan(loss2)].mean()
+        return loss1+loss2

@@ -7,27 +7,18 @@ class CustomEmbedding(nn.Module):
                 emb_dim,
                 conv_kernel_size):
         super().__init__()
-        self.struct = (conv_kernel_size > 2)
+        self.conv_layer = nn.Sequential(
+            nn.Conv2d(conv_kernel_size,),
+            nn.ReLU(),
+        )
+        self.emb = nn.Embedding(4, emb_dim//2)
 
-        if self.struct:
-            self.zero_padder = nn.ZeroPad1d(conv_kernel_size//2)
-            self.kernel_size = conv_kernel_size
-            self.base_convert = torch.tensor([4**(conv_kernel_size-1-x) for x in range(conv_kernel_size)]).to('cuda')
-            self.max_tokens = int(torch.sum(self.base_convert).detach()) * 4
-            self.emb = nn.Embedding(self.max_tokens, emb_dim)
-        else:
-            self.emb = nn.Embedding(4, emb_dim)
+    def forward(self, x, bpps):
+        x1 = self.emb(x)                    # batch_size, seq_len, dim//2
+        x2 = self.conv_layer(bpps)          # batch_size, seq_len, dim//2
+        out = torch.concat(x1, x2, dim = 2) # batch_size, seq_len, dim
 
-    def forward(self, x): # batch_size, seq_len
-        if self.struct:
-            x = self.zero_padder(x)
-            x = x.unfold(1,self.kernel_size,1) # batch_size, seq_len, kernel_size
-            x = torch.matmul(x.type(torch.float32), self.base_convert.type(torch.float32)) # batch_size, seq_len
-            # convert back to int for embeddings
-            x = x.type(torch.int64)
-
-        x = self.emb(x) # batch_size, seq_len, dim
-        return x
+        return out
     
 
 if __name__ == "__main__":

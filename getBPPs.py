@@ -1,4 +1,4 @@
-from arnie.mfe import mfe
+from arnie.bpps import bpps
 import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix, save_npz
@@ -6,15 +6,18 @@ from tqdm import tqdm
 from multiprocessing import Pool
 
 MAX_SEQ_LEN = 206
-PROCESSORS = 24
+PROCESSORS = 24 
 GENERATE_TEST = True
 
 
-OUT_PATH = "data/structures/"
+if GENERATE_TEST:
+    OUT_PATH = "data/bpps_test/"
+else:
+    OUT_PATH = "data/bpps/"
 
 def get_bp(data):
     sequence, sequence_id = data
-    bp_matrix = mfe(sequence,package="eternafold")
+    bp_matrix = np.float16(bpps(sequence,package="eternafold"))
     save_npz(OUT_PATH+sequence_id+".npz", csr_matrix(bp_matrix))
 
 if __name__ == "__main__":

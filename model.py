@@ -4,7 +4,6 @@ import math
 import numpy as np
 from embedding import CustomEmbedding
 from RNA_transformer import TransformerEncoder, TransformerEncoderLayer
-from x_transformers import Encoder
 
 # main classes
 class SinusoidalPosEmb(nn.Module):
@@ -37,8 +36,7 @@ class RNA_Model(nn.Module):
             TransformerEncoderLayer(d_model=dim, nhead=heads, dim_feedforward=4*dim,
                 dropout=dropout, activation=nn.GELU(), batch_first=True, norm_first=True), depth)
         self.proj_out = nn.Sequential(
-            nn.Linear(dim,dim//2),
-            nn.Linear(dim//2,2)
+            nn.Linear(dim,4)
         )
     
     def forward(self, x0):
@@ -48,13 +46,14 @@ class RNA_Model(nn.Module):
         max_seq_len = torch.max(seq_lens)
         mask = mask[:,:max_seq_len]
         x = x0['seq'][:,:max_seq_len]
+        bpps = x0['bpps'][:,:max_seq_len,:max_seq_len]
         
         pos = torch.arange(max_seq_len, device=x.device).unsqueeze(0)
         pos = self.pos_enc(pos)
         x = self.emb(x)
         x = x + pos
         
-        x = self.transformer(x, src_key_padding_mask=~mask)
+        x = self.transformer(x, bpps=bpps, src_key_padding_mask=~mask)
         x = self.proj_out(x)
         
         return x

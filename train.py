@@ -9,7 +9,7 @@ from datetime import date
 PATH = 'data/'
 OUT = 'runs/'
 BATCH_SIZE = 64
-NUM_WORKERS = 2
+NUM_WORKERS = 16
 SEED = 2023
 nfolds = 4
 WEIGHT_DECAY = 0.05
@@ -104,7 +104,7 @@ if __name__ == "__main__":
                         num_cycles = int(num_cycles), 
                         epochs_per_cycle = int(epochs_per_cycle), 
                         dim = int(dim), 
-                        depth = int(depth), 
+                        depth = int(depth),
                         heads = int(heads),
-                        dropout = int(dropout), 
+                        dropout = float(dropout), 
                         conv_kernel_size=0)
